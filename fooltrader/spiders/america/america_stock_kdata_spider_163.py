@@ -8,9 +8,9 @@ import scrapy
 from scrapy import Request
 from scrapy import signals
 
-from fooltrader.api.quote import get_security_list
+from fooltrader.api.technical import get_security_list
 from fooltrader.contract.data_contract import KDATA_COLUMN_163, KDATA_INDEX_COLUMN_163, \
-    KDATA_COLUMN_INDEX, KDATA_COLUMN_STOCK
+    KDATA_INDEX_COL, KDATA_STOCK_COL
 from fooltrader.contract.files_contract import get_kdata_path
 from fooltrader.settings import US_STOCK_CODES
 from fooltrader.utils.utils import to_time_str
@@ -35,7 +35,8 @@ class AmericaStockKdataSpider(scrapy.Spider):
         if not the_years:
             if not pd.isna(item['listDate']):
                 # 163 could just provide the date after year 2002
-                the_years = range(max(int(item['listDate']), 2002), pd.Timestamp.today().year + 1)
+                list_date_year_, list_date_month_, list_date_day_ = item['listDate'].split("-")
+                the_years = range(max(int(list_date_year_), 2002), pd.Timestamp.today().year + 1)
             else:
                 the_years = range(2005, pd.Timestamp.today().year + 1)
 
@@ -68,17 +69,21 @@ class AmericaStockKdataSpider(scrapy.Spider):
                     yield request
 
     def download_day_k_data(self, response):
-        path = response.meta['path']
+        filename_ = response.meta['path']
         item = response.meta['item']
 
         try:
             # 已经保存的csv数据
-            if os.path.exists(path):
-                df_current = pd.read_csv(path, dtype=str)
+            if os.path.exists(filename_):
+                df_current = pd.read_csv(filename_, dtype=str)
                 # 补全历史数据
                 if 'name' not in df_current.columns:
                     df_current['name'] = item['name']
             else:
+                pathname_ = os.path.dirname(filename_)
+                if not os.path.isdir(pathname_):
+                    os.makedirs(pathname_)
+                    
                 df_current = pd.DataFrame()
 
             tmp_str = response.text
@@ -144,19 +149,19 @@ class AmericaStockKdataSpider(scrapy.Spider):
             if item['type'] == 'index':
                 df_current = df_current.dropna(subset=KDATA_INDEX_COLUMN_163)
                 # 保证col顺序
-                df_current = df_current.loc[:, KDATA_COLUMN_INDEX]
+                df_current = df_current.loc[:, KDATA_INDEX_COL]
             else:
                 df_current = df_current.dropna(subset=KDATA_COLUMN_163)
                 # 保证col顺序
-                df_current = df_current.loc[:, KDATA_COLUMN_STOCK]
+                df_current = df_current.loc[:, KDATA_STOCK_COL]
 
             df_current = df_current.drop_duplicates(subset='timestamp', keep='last')
             df_current = df_current.set_index(df_current['timestamp'], drop=False)
             df_current.index = pd.to_datetime(df_current.index)
             df_current = df_current.sort_index()
-            df_current.to_csv(path, index=False)
+            df_current.to_csv(filename_, index=False)
         except Exception as e:
-            self.logger.error('error when getting k data url={} error={}'.format(response.url, e))
+            self.logger.exception('error when getting k data url={} error={}'.format(response.url, e))
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
